@@ -86,7 +86,7 @@ export default async function handler(req, res) {
         // 清除舊資料
         await supabase.from('assignments').delete().eq('date', d);
         
-        // 寫入 assignments 資料表（對應 correct 欄位名稱）
+        // 寫入 assignments 資料表
         const { error } = await supabase.from('assignments').insert(
           list.map((item, idx) => ({
             date: item.date,
