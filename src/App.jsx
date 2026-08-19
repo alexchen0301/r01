@@ -92,10 +92,10 @@ function normalizeRows(rawRows, fallbackDate) {
       return {
         id: `${date}-${empId || name}-${i}`,
         date,
+        group: groupKey ? String(raw[groupKey] ?? "").trim() : "",
         name,
         empId,
         emp_id: empId,
-        group: groupKey ? String(raw[groupKey] ?? "").trim() : "",
         checkpoint: cpKey ? String(raw[cpKey] ?? "").trim() : "",
         workContent: workKey ? String(raw[workKey] ?? "").trim() : "",
         work_content: workKey ? String(raw[workKey] ?? "").trim() : "",
@@ -544,7 +544,6 @@ function LookupView({
             className="rounded-2xl border overflow-hidden"
             style={{ borderColor: "#2E4066", background: "#101A30" }}
           >
-            {/* 更新點 1：執勤指派 改為 管制點位 */}
             <div
               className="px-4 py-2 flex items-center justify-between text-xs flap-font tracking-wider uppercase"
               style={{ background: "#1B2740", color: "#8FA3C4" }}
@@ -557,7 +556,6 @@ function LookupView({
               <div className="text-slate-400 text-xs mb-1">{selectedResult.empId}</div>
               <div className="text-slate-100 text-lg font-semibold mb-4">{selectedResult.name}</div>
 
-              {/* 更新點 3：新增組別欄位 */}
               {selectedResult.group && (
                 <div className="mb-3">
                   <div className="text-slate-500 text-xs mb-0.5 tracking-wide">組別</div>
@@ -583,8 +581,6 @@ function LookupView({
                 </div>
               </div>
             </div>
-
-            {/* 更新點 2：已刪除 ● 已確認今日執勤資料 的底部區塊 */}
           </div>
           {searchResults.length > 1 && (
             <button
@@ -722,6 +718,7 @@ function AdminView({
           </div>
         )}
 
+        {/* 預覽表格包含組別欄位 */}
         {uploadPreview && (
           <div className="mt-4">
             <div className="text-slate-300 text-xs mb-2">
@@ -735,6 +732,7 @@ function AdminView({
                 <thead>
                   <tr className="text-slate-500" style={{ background: "#0B1220" }}>
                     <th className="text-left px-2 py-1.5 font-medium">日期</th>
+                    <th className="text-left px-2 py-1.5 font-medium">組別</th>
                     <th className="text-left px-2 py-1.5 font-medium">姓名</th>
                     <th className="text-left px-2 py-1.5 font-medium">員編</th>
                     <th className="text-left px-2 py-1.5 font-medium">點位</th>
@@ -744,6 +742,7 @@ function AdminView({
                   {uploadPreview.map((r) => (
                     <tr key={r.id} className="border-t" style={{ borderColor: "#1E2A44" }}>
                       <td className="px-2 py-1.5 text-slate-400 tabular">{r.date}</td>
+                      <td className="px-2 py-1.5 text-amber-300">{r.group || "—"}</td>
                       <td className="px-2 py-1.5 text-slate-200">{r.name}</td>
                       <td className="px-2 py-1.5 text-slate-400 tabular">{r.empId}</td>
                       <td className="px-2 py-1.5 text-slate-200">{r.checkpoint}</td>
