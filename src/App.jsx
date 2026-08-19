@@ -160,7 +160,7 @@ export default function App() {
   const fileInputRef = useRef(null);
   const [deletingDate, setDeletingDate] = useState(null);
 
-  // 1. 讀取所有包含資料的日期列表
+  // 修復關鍵：讀取所有日期列表（改為正確的 /api/roster 路徑）
   const loadDateList = useCallback(async () => {
     try {
       const data = await apiGet("/api/roster");
@@ -174,14 +174,13 @@ export default function App() {
     }
   }, []);
 
-  // 2. 讀取特定日期的班表資料
+  // 修復關鍵：讀取特定日期的班表（改為正確的 /api/roster?date= 路徑）
   const loadRecordsForDate = useCallback(async (date) => {
     if (!date) return;
     setRecordsLoading(true);
     try {
       const data = await apiGet(`/api/roster?date=${encodeURIComponent(date)}`);
       const rawRecords = Array.isArray(data.records) ? data.records : [];
-      // 統一轉成前端需要的 key 格式
       const normalizedRecords = rawRecords.map(r => ({
         ...r,
         empId: r.empId || r.emp_id || "",
@@ -294,7 +293,6 @@ export default function App() {
       setUploadPreview(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       
-      // 重新加載最新日期列表
       const updatedList = await loadDateList();
       const targetDate = uploadPreview[0]?.date || updatedList[0] || todayStr();
       setSelectedDate(targetDate);
