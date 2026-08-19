@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from "react";
 import * as XLSX from "xlsx";
 
 /* ------------------------------------------------------------------ */
-/*  設定區                                                             */
+/*  設定區                                                            */
 /* ------------------------------------------------------------------ */
 const MAX_PIN_ATTEMPTS = 3; // 連續錯誤達此次數即封鎖
 const LOCKOUT_MINUTES = 15; // 封鎖持續時間（分鐘）
@@ -53,7 +53,6 @@ function findKey(row, candidates) {
     const hit = keys.find((k) => k.trim() === c);
     if (hit) return hit;
   }
-  // 寬鬆比對（去除空白後包含關係）
   for (const c of candidates) {
     const hit = keys.find((k) => k.replace(/\s/g, "").includes(c.replace(/\s/g, "")));
     if (hit) return hit;
@@ -76,7 +75,6 @@ function normalizeRows(rawRows, fallbackDate) {
 
       let date = dateKey ? String(raw[dateKey] ?? "").trim() : "";
       if (!date) date = fallbackDate;
-      // 處理 Excel 日期序號被解析成數字的狀況
       if (/^\d+(\.\d+)?$/.test(date) && Number(date) > 30000) {
         const d = XLSX.SSF.parse_date_code(Number(date));
         if (d) date = `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`;
@@ -95,7 +93,7 @@ function normalizeRows(rawRows, fallbackDate) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  翻牌文字（信號板風格揭示效果）                                      */
+/*  翻牌文字                                                          */
 /* ------------------------------------------------------------------ */
 function FlapText({ text, className, style }) {
   const [display, setDisplay] = useState(text);
@@ -127,16 +125,14 @@ function FlapText({ text, className, style }) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  主元件                                                             */
+/*  主元件                                                            */
 /* ------------------------------------------------------------------ */
 export default function App() {
-  const [mode, setMode] = useState("lookup"); // lookup | admin
+  const [mode, setMode] = useState("lookup");
   const [adminAuthed, setAdminAuthed] = useState(false);
   const [pinInput, setPinInput] = useState("");
   const [pinError, setPinError] = useState("");
-  const [pinAttempts, setPinAttempts] = useState(0);
   const [lockedUntil, setLockedUntil] = useState(null);
-  const [lockCheckLoading, setLockCheckLoading] = useState(true);
 
   const [availableDates, setAvailableDates] = useState([]);
   const [selectedDate, setSelectedDate] = useState(todayStr());
@@ -150,12 +146,11 @@ export default function App() {
 
   const [uploadPreview, setUploadPreview] = useState(null);
   const [uploadDateOverride, setUploadDateOverride] = useState(todayStr());
-  const [uploadStatus, setUploadStatus] = useState(null); // {type, msg}
+  const [uploadStatus, setUploadStatus] = useState(null);
   const [uploadBusy, setUploadBusy] = useState(false);
   const fileInputRef = useRef(null);
   const [deletingDate, setDeletingDate] = useState(null);
 
-  /* ---------------- 載入可用日期清單 ---------------- */
   const loadDateList = useCallback(async () => {
     try {
       const data = await apiGet("/api/data?dates=1");
@@ -176,7 +171,7 @@ export default function App() {
       setRecords(Array.isArray(data.records) ? data.records : []);
     } catch {
       setRecords([]);
-    } finally {
+    } fontally {
       setRecordsLoading(false);
     }
   }, []);
@@ -197,13 +192,10 @@ export default function App() {
     setSearchTerm("");
   }, [selectedDate, loadRecordsForDate]);
 
-  /* ---------------- 管理員 PIN：只在登入時輸入一次 ---------------- */
   useEffect(() => {
-    setLockCheckLoading(false);
     if (sessionStorage.getItem("adminToken")) setAdminAuthed(true);
   }, []);
 
-  /* ---------------- 查詢 ---------------- */
   function handleSearch() {
     const term = searchTerm.trim();
     setSearched(true);
@@ -220,9 +212,8 @@ export default function App() {
     if (results.length === 1) setSelectedResult(results[0]);
   }
 
-  /* ---------------- 管理員：PIN 驗證 ---------------- */
   async function handlePinSubmit(e) {
-    e.preventDefault();
+    if (e) e.preventDefault();
     setPinError("");
     try {
       const data = await fetch("/api/admin", {
@@ -239,13 +230,6 @@ export default function App() {
       setPinError(err.message || "PIN 錯誤");
       setPinInput("");
     }
-  }
-
-  function handleAdminLogout() {
-    sessionStorage.removeItem("adminToken");
-    setAdminAuthed(false);
-    setPinInput("");
-    setPinError("");
   }
 
   function handleFileChange(e) {
@@ -294,7 +278,7 @@ export default function App() {
       });
       setUploadPreview(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
-      const list = await loadDateList();
+      await loadDateList();
       if (Object.keys(result.byDate || {}).includes(selectedDate)) loadRecordsForDate(selectedDate);
     } catch (err) {
       setUploadStatus({ type: "error", msg: err.message || "儲存失敗，請再試一次。" });
@@ -327,7 +311,6 @@ export default function App() {
       style={{ background: "#0B1220", fontFamily: "'Inter', sans-serif" }}
     >
       <style>{`
-        ${fontImport}
         .flap-font { font-family: 'Barlow Condensed', sans-serif; }
         .tabular { font-variant-numeric: tabular-nums; }
         @keyframes riseIn { from { opacity:0; transform: translateY(8px);} to {opacity:1; transform: translateY(0);} }
@@ -343,9 +326,7 @@ export default function App() {
         <div className="max-w-md mx-auto px-4 py-3">
           <div className="flex items-center justify-between">
             <div>
-              <div
-                className="flap-font uppercase tracking-widest text-red-400 text-xs font-semibold"
-              >
+              <div className="flap-font uppercase tracking-widest text-red-400 text-xs font-semibold">
                 廣慈 / 奉天宮站
               </div>
               <div className="flap-font text-slate-100 text-xl font-semibold leading-tight">
@@ -401,7 +382,6 @@ export default function App() {
             pinError={pinError}
             handlePinSubmit={handlePinSubmit}
             lockedUntil={lockedUntil}
-            debugClicks={debugClicks}
           />
         ) : (
           <AdminView
@@ -429,7 +409,7 @@ export default function App() {
 }
 
 /* ------------------------------------------------------------------ */
-/*  查詢畫面                                                            */
+/*  查詢畫面                                                          */
 /* ------------------------------------------------------------------ */
 function LookupView({
   availableDates,
@@ -447,7 +427,6 @@ function LookupView({
 }) {
   return (
     <div className="rise-in">
-      {/* 日期選擇 */}
       <div className="flex items-center justify-between mb-4">
         <label className="text-xs text-slate-400 flap-font uppercase tracking-wider">
           查詢日期
@@ -470,7 +449,6 @@ function LookupView({
         </select>
       </div>
 
-      {/* 搜尋框 */}
       <div className="mb-2">
         <div
           className="flex items-center rounded-xl border px-3 py-2.5"
@@ -513,7 +491,6 @@ function LookupView({
         </div>
       )}
 
-      {/* 多筆結果選單 */}
       {!recordsLoading && searched && searchResults.length > 1 && !selectedResult && (
         <div className="mt-4 space-y-2">
           <div className="text-xs text-slate-400 mb-1">找到 {searchResults.length} 筆相符資料，請選擇：</div>
@@ -531,7 +508,6 @@ function LookupView({
         </div>
       )}
 
-      {/* 查無資料 */}
       {!recordsLoading && searched && searchResults.length === 0 && (
         <div
           className="mt-6 text-center rounded-xl border p-6"
@@ -544,7 +520,6 @@ function LookupView({
         </div>
       )}
 
-      {/* 結果卡片 */}
       {selectedResult && (
         <div className="mt-5 rise-in">
           <div
@@ -600,9 +575,9 @@ function LookupView({
 }
 
 /* ------------------------------------------------------------------ */
-/*  管理員 PIN 驗證                                                     */
+/*  管理員 PIN 驗證                                                  */
 /* ------------------------------------------------------------------ */
-function PinGate({ pinInput, setPinInput, pinError, handlePinSubmit, lockedUntil, debugClicks }) {
+function PinGate({ pinInput, setPinInput, pinError, handlePinSubmit, lockedUntil }) {
   const isLocked = !!(lockedUntil && lockedUntil > Date.now());
   const [showPin, setShowPin] = useState(false);
   return (
@@ -622,7 +597,7 @@ function PinGate({ pinInput, setPinInput, pinError, handlePinSubmit, lockedUntil
             disabled={isLocked}
             onChange={(e) => setPinInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") handlePinSubmit();
+              if (e.key === "Enter") handlePinSubmit(e);
             }}
             className="w-full text-center tracking-[0.5em] text-xl rounded-lg px-3 py-2 outline-none border disabled:opacity-40"
             style={{ background: "#0B1220", color: "#E7EDF7", borderColor: "#28395A" }}
@@ -654,14 +629,13 @@ function PinGate({ pinInput, setPinInput, pinError, handlePinSubmit, lockedUntil
         <div className="text-slate-600 text-xs mt-3">
           連續輸入錯誤 {MAX_PIN_ATTEMPTS} 次將鎖定此裝置 {LOCKOUT_MINUTES} 分鐘
         </div>
-        <div className="text-slate-700 text-[10px] mt-2">除錯：已按下送出 {debugClicks} 次</div>
       </div>
-    </form>
+    </div>
   );
 }
 
 /* ------------------------------------------------------------------ */
-/*  管理員畫面                                                          */
+/*  管理員畫面                                                        */
 /* ------------------------------------------------------------------ */
 function AdminView({
   availableDates,
@@ -679,7 +653,6 @@ function AdminView({
 }) {
   return (
     <div className="rise-in space-y-6">
-      {/* 上傳區 */}
       <div className="rounded-2xl border p-4" style={{ borderColor: "#28395A", background: "#111A2E" }}>
         <div className="flap-font text-slate-100 text-sm font-semibold uppercase tracking-wider mb-3">
           上傳每日名單
@@ -780,7 +753,6 @@ function AdminView({
         )}
       </div>
 
-      {/* 已上傳日期清單 */}
       <div className="rounded-2xl border p-4" style={{ borderColor: "#28395A", background: "#111A2E" }}>
         <div className="flap-font text-slate-100 text-sm font-semibold uppercase tracking-wider mb-3">
           已上傳名單
