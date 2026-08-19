@@ -43,6 +43,11 @@ async function apiAdmin(action, payload = {}) {
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "操作失敗");
+  
+  // 雙重保險：登入成功自動寫入 Token
+  if (action === "login" && data.token) {
+    sessionStorage.setItem("adminToken", data.token);
+  }
   return data;
 }
 
@@ -226,7 +231,9 @@ export default function App() {
       });
       const result = await data.json().catch(() => ({}));
       if (!data.ok) throw new Error(result.error || "PIN 錯誤");
-      sessionStorage.getItem("adminToken", result.token);
+      
+      // 修復核心問題：改用 setItem 存入 Token
+      sessionStorage.setItem("adminToken", result.token);
       setAdminAuthed(true);
       setPinInput("");
     } catch (err) {
@@ -578,7 +585,7 @@ function LookupView({
 }
 
 /* ------------------------------------------------------------------ */
-/*  管理員 PIN 驗證                                                  */
+/*  管理員 PIN 驗證                                                   */
 /* ------------------------------------------------------------------ */
 function PinGate({ pinInput, setPinInput, pinError, handlePinSubmit, lockedUntil }) {
   const isLocked = !!(lockedUntil && lockedUntil > Date.now());
