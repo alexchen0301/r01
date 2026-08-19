@@ -1,10 +1,8 @@
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 
-// 讀取管理員密碼
 const ADMIN_PIN = process.env.ADMIN_PIN;
-// 使用固定加解密鹽值，確保登入與上傳時 Token 驗證絕對一致
-const JWT_SECRET = process.env.ADMIN_PIN || "guangci_system_secure_jwt_secret_key_2026";
+const JWT_SECRET = "guangci_system_secure_jwt_secret_key_2026";
 
 function sign(payload) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
@@ -55,22 +53,24 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: '伺服器未讀取到 ADMIN_PIN 環境變數' });
   }
 
-  const { action, pin, records, date } = req.body || {};
+  const bodyData = req.body || {};
+  const { action, pin, records, date } = bodyData;
 
   // 1. 登入驗證
   if (action === 'login') {
     if (!pin || String(pin).trim() !== String(ADMIN_PIN).trim()) {
       return res.status(401).json({ error: 'PIN 碼不正確' });
     }
-    // 簽發 24 小時有效的 Token
     const token = sign({ admin: true, exp: Math.floor(Date.now() / 1000) + 86400 });
     return res.status(200).json({ ok: true, token });
   }
 
-  // 2. 驗證權限（上傳/刪除等操作）
+  // 2. 驗證權限（雙重抓取：相容 Header 與 Body）
   const authHeader = req.headers.authorization || '';
-  const token = authHeader.replace(/^Bearer\s+/, '');
-  const auth = verify(token);
+  const headerToken = authHeader.replace(/^Bearer\s+/, '');
+  const rawToken = headerToken || bodyData.token || '';
+  
+  const auth = verify(rawToken);
 
   if (!auth) {
     return res.status(401).json({ error: '權限不足或登入已過期，請重新輸入 PIN 碼' });
