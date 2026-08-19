@@ -35,8 +35,11 @@ async function apiAdmin(action, payload = {}) {
   const token = sessionStorage.getItem("adminToken") || "";
   const res = await fetch("/api/admin", {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ action, ...payload }),
+    headers: { 
+      "Content-Type": "application/json", 
+      "Authorization": `Bearer ${token}` 
+    },
+    body: JSON.stringify({ action, ...payload, token }), // 將 token 同時放入 body 備用
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "操作失敗");
