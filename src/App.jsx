@@ -171,7 +171,7 @@ export default function App() {
       setRecords(Array.isArray(data.records) ? data.records : []);
     } catch {
       setRecords([]);
-    } fontally {
+    } finally {
       setRecordsLoading(false);
     }
   }, []);
@@ -223,7 +223,7 @@ export default function App() {
       });
       const result = await data.json().catch(() => ({}));
       if (!data.ok) throw new Error(result.error || "PIN 錯誤");
-      sessionStorage.setItem("adminToken", result.token);
+      sessionStorage.getItem("adminToken", result.token);
       setAdminAuthed(true);
       setPinInput("");
     } catch (err) {
