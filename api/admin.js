@@ -1,9 +1,10 @@
 import { createClient } from '@supabase/supabase-js';
 import crypto from 'crypto';
 
-// 優先使用 ADMIN_PIN，若無則抓取 SUPABASE Key，最後保底使用固定字串作為加密鹽值
+// 讀取管理員密碼
 const ADMIN_PIN = process.env.ADMIN_PIN;
-const JWT_SECRET = process.env.ADMIN_PIN || process.env.SUPABASE_ANON_KEY || "guangci_fallback_system_secret_2026";
+// 使用固定加解密鹽值，確保登入與上傳時 Token 驗證絕對一致
+const JWT_SECRET = process.env.ADMIN_PIN || "guangci_system_secure_jwt_secret_key_2026";
 
 function sign(payload) {
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
@@ -24,7 +25,9 @@ function verify(token) {
     .createHmac('sha256', String(JWT_SECRET))
     .update(`${header}.${body}`)
     .digest('base64url');
+  
   if (signature !== expected) return null;
+  
   try {
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
     if (payload.exp && Date.now() / 1000 > payload.exp) return null;
@@ -38,7 +41,7 @@ function getSupabase() {
   const url = process.env.SUPABASE_URL;
   const key = process.env.SUPABASE_ANON_KEY;
   if (!url || !key) {
-    throw new Error('Supabase 環境變數未設定，請至 Vercel 檢查 SUPABASE_URL 與 SUPABASE_ANON_KEY');
+    throw new Error('Supabase 環境變數未設定');
   }
   return createClient(url, key);
 }
@@ -48,23 +51,23 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: 'Method Not Allowed' });
   }
 
-  // 若 Vercel 完全未讀取到 ADMIN_PIN 變數，回傳明確提示
   if (!ADMIN_PIN) {
-    return res.status(500).json({ error: '伺服器未讀取到 ADMIN_PIN 環境變數，請至 Vercel 設定並重新部署。' });
+    return res.status(500).json({ error: '伺服器未讀取到 ADMIN_PIN 環境變數' });
   }
 
   const { action, pin, records, date } = req.body || {};
 
-  // 登入驗證
+  // 1. 登入驗證
   if (action === 'login') {
     if (!pin || String(pin).trim() !== String(ADMIN_PIN).trim()) {
       return res.status(401).json({ error: 'PIN 碼不正確' });
     }
+    // 簽發 24 小時有效的 Token
     const token = sign({ admin: true, exp: Math.floor(Date.now() / 1000) + 86400 });
     return res.status(200).json({ ok: true, token });
   }
 
-  // 以下操作皆需驗證 Token
+  // 2. 驗證權限（上傳/刪除等操作）
   const authHeader = req.headers.authorization || '';
   const token = authHeader.replace(/^Bearer\s+/, '');
   const auth = verify(token);
