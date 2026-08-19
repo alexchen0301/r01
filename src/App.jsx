@@ -1,439 +1,795 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from "react";
+import * as XLSX from "xlsx";
 
-// API 溝通函式（自動儲存與帶入 Token）
+/* ------------------------------------------------------------------ */
+/*  設定區                                                            */
+/* ------------------------------------------------------------------ */
+const MAX_PIN_ATTEMPTS = 3; // 連續錯誤達此次數即封鎖
+const LOCKOUT_MINUTES = 15; // 封鎖持續時間（分鐘）
+
+const FLAP_POOL =
+  "廣慈奉天宮站管制點位工作內容人潮安全通車東西南北門口區域崗哨值勤守望警戒巡查".split("");
+
+const HEADER_MAP = {
+  date: ["日期", "Date", "date"],
+  name: ["姓名", "名字", "Name", "name"],
+  empId: ["員工編號", "員編", "工號", "EmpID", "ID", "員工編号"],
+  checkpoint: ["點位", "崗位", "站點", "位置", "管制點", "崗哨", "Checkpoint"],
+  workContent: ["工作內容", "工作項目", "內容", "任務", "Content", "Duty"],
+};
+
+function toHalfWidthDigits(str) {
+  return str.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+}
+function normalizePin(str) {
+  return toHalfWidthDigits(str).trim();
+}
+async function apiGet(path) {
+  const res = await fetch(path);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || "讀取失敗");
+  return data;
+}
+
 async function apiAdmin(action, payload = {}) {
   const token = sessionStorage.getItem("adminToken") || "";
-  
   const res = await fetch("/api/admin", {
     method: "POST",
     headers: { 
       "Content-Type": "application/json", 
       "Authorization": `Bearer ${token}` 
     },
-    body: JSON.stringify({ action, ...payload, token }),
+    body: JSON.stringify({ action, ...payload, token }), // 將 token 同時放入 body 備用
   });
-  
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "操作失敗");
-  
-  // 登入成功自動將 Token 寫入 sessionStorage
-  if (action === "login" && data.token) {
-    sessionStorage.setItem("adminToken", data.token);
-  }
-  
   return data;
 }
 
-export default function App() {
-  // 頁面狀態
-  const [activeTab, setActiveTab] = useState('search'); // 'search' | 'admin'
-  
-  // 查詢頁面狀態
-  const [selectedDate, setSelectedDate] = useState('');
-  const [availableDates, setAvailableDates] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [rosters, setRosters] = useState([]);
-  const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
+function todayStr() {
+  return new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
+}
 
-  // 管理後台狀態
-  const [pin, setPin] = useState('');
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
-  const [loginError, setLoginError] = useState('');
-  const [isUploading, setIsUploading] = useState(false);
-  const [excelData, setExcelData] = useState([]);
-  const [adminMsg, setAdminMsg] = useState('');
+function findKey(row, candidates) {
+  const keys = Object.keys(row);
+  for (const c of candidates) {
+    const hit = keys.find((k) => k.trim() === c);
+    if (hit) return hit;
+  }
+  for (const c of candidates) {
+    const hit = keys.find((k) => k.replace(/\s/g, "").includes(c.replace(/\s/g, "")));
+    if (hit) return hit;
+  }
+  return null;
+}
 
-  // 1. 初始化讀取資料庫的日期列表
+function normalizeRows(rawRows, fallbackDate) {
+  return rawRows
+    .map((raw, i) => {
+      const nameKey = findKey(raw, HEADER_MAP.name);
+      const idKey = findKey(raw, HEADER_MAP.empId);
+      const cpKey = findKey(raw, HEADER_MAP.checkpoint);
+      const workKey = findKey(raw, HEADER_MAP.workContent);
+      const dateKey = findKey(raw, HEADER_MAP.date);
+
+      const name = nameKey ? String(raw[nameKey] ?? "").trim() : "";
+      const empId = idKey ? String(raw[idKey] ?? "").trim() : "";
+      if (!name && !empId) return null;
+
+      let date = dateKey ? String(raw[dateKey] ?? "").trim() : "";
+      if (!date) date = fallbackDate;
+      if (/^\d+(\.\d+)?$/.test(date) && Number(date) > 30000) {
+        const d = XLSX.SSF.parse_date_code(Number(date));
+        if (d) date = `${d.y}-${String(d.m).padStart(2, "0")}-${String(d.d).padStart(2, "0")}`;
+      }
+
+      return {
+        id: `${date}-${empId || name}-${i}`,
+        date,
+        name,
+        empId,
+        checkpoint: cpKey ? String(raw[cpKey] ?? "").trim() : "",
+        workContent: workKey ? String(raw[workKey] ?? "").trim() : "",
+      };
+    })
+    .filter(Boolean);
+}
+
+/* ------------------------------------------------------------------ */
+/*  翻牌文字                                                          */
+/* ------------------------------------------------------------------ */
+function FlapText({ text, className, style }) {
+  const [display, setDisplay] = useState(text);
   useEffect(() => {
-    fetchDatesAndData();
+    const chars = text.split("");
+    const totalFrames = 9;
+    let frame = 0;
+    const interval = setInterval(() => {
+      frame++;
+      const revealCount = Math.ceil((frame / totalFrames) * chars.length);
+      const next = chars
+        .map((c, i) =>
+          i < revealCount ? c : FLAP_POOL[Math.floor(Math.random() * FLAP_POOL.length)]
+        )
+        .join("");
+      setDisplay(next);
+      if (frame >= totalFrames) {
+        clearInterval(interval);
+        setDisplay(text);
+      }
+    }, 45);
+    return () => clearInterval(interval);
+  }, [text]);
+  return (
+    <span className={className} style={style}>
+      {display}
+    </span>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  主元件                                                            */
+/* ------------------------------------------------------------------ */
+export default function App() {
+  const [mode, setMode] = useState("lookup");
+  const [adminAuthed, setAdminAuthed] = useState(false);
+  const [pinInput, setPinInput] = useState("");
+  const [pinError, setPinError] = useState("");
+  const [lockedUntil, setLockedUntil] = useState(null);
+
+  const [availableDates, setAvailableDates] = useState([]);
+  const [selectedDate, setSelectedDate] = useState(todayStr());
+  const [records, setRecords] = useState([]);
+  const [recordsLoading, setRecordsLoading] = useState(true);
+
+  const [searchTerm, setSearchTerm] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [selectedResult, setSelectedResult] = useState(null);
+  const [searched, setSearched] = useState(false);
+
+  const [uploadPreview, setUploadPreview] = useState(null);
+  const [uploadDateOverride, setUploadDateOverride] = useState(todayStr());
+  const [uploadStatus, setUploadStatus] = useState(null);
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const fileInputRef = useRef(null);
+  const [deletingDate, setDeletingDate] = useState(null);
+
+  const loadDateList = useCallback(async () => {
+    try {
+      const data = await apiGet("/api/data?dates=1");
+      const list = Array.isArray(data.dates) ? data.dates : [];
+      list.sort().reverse();
+      setAvailableDates(list);
+      return list;
+    } catch {
+      setAvailableDates([]);
+      return [];
+    }
   }, []);
 
-  const fetchDatesAndData = async () => {
-    setLoading(true);
-    setErrorMsg('');
+  const loadRecordsForDate = useCallback(async (date) => {
+    setRecordsLoading(true);
     try {
-      const res = await fetch('/api/roster');
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '無法讀取資料');
-      
-      const dates = data.dates || [];
-      setAvailableDates(dates);
-      
-      if (dates.length > 0) {
-        setSelectedDate(dates[0]);
-        fetchRosterByDate(dates[0]);
-      } else {
-        setRosters([]);
-      }
-    } catch (err) {
-      setErrorMsg(err.message || '讀取資料失敗');
+      const data = await apiGet(`/api/data?date=${encodeURIComponent(date)}`);
+      setRecords(Array.isArray(data.records) ? data.records : []);
+    } catch {
+      setRecords([]);
     } finally {
-      setLoading(false);
+      setRecordsLoading(false);
     }
-  };
+  }, []);
 
-  const fetchRosterByDate = async (date) => {
-    if (!date) return;
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/roster?date=${encodeURIComponent(date)}`);
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || '讀取失敗');
-      setRosters(data.records || []);
-    } catch (err) {
-      setErrorMsg(err.message || '讀取班表失敗');
-    } finally {
-      setLoading(false);
+  useEffect(() => {
+    (async () => {
+      const list = await loadDateList();
+      const initial = list.includes(todayStr()) ? todayStr() : list[0] || todayStr();
+      setSelectedDate(initial);
+      loadRecordsForDate(initial);
+    })();
+  }, [loadDateList, loadRecordsForDate]);
+
+  useEffect(() => {
+    loadRecordsForDate(selectedDate);
+    setSelectedResult(null);
+    setSearched(false);
+    setSearchTerm("");
+  }, [selectedDate, loadRecordsForDate]);
+
+  useEffect(() => {
+    if (sessionStorage.getItem("adminToken")) setAdminAuthed(true);
+  }, []);
+
+  function handleSearch() {
+    const term = searchTerm.trim();
+    setSearched(true);
+    setSelectedResult(null);
+    if (!term) {
+      setSearchResults([]);
+      return;
     }
-  };
-
-  // 2. 搜尋過濾邏輯
-  const filteredRosters = useMemo(() => {
-    if (!searchQuery.trim()) return rosters;
-    const q = searchQuery.trim().toLowerCase();
-    return rosters.filter(r => 
-      (r.name && r.name.toLowerCase().includes(q)) ||
-      (r.emp_id && r.emp_id.toLowerCase().includes(q)) ||
-      (r.checkpoint && r.checkpoint.toLowerCase().includes(q)) ||
-      (r.work_content && r.work_content.toLowerCase().includes(q))
+    const lower = term.toLowerCase();
+    const results = records.filter(
+      (r) => r.name.includes(term) || r.empId.toLowerCase().includes(lower)
     );
-  }, [rosters, searchQuery]);
+    setSearchResults(results);
+    if (results.length === 1) setSelectedResult(results[0]);
+  }
 
-  // 3. 後台登入處理
-  const handleLoginSubmit = async (e) => {
-    e.preventDefault();
-    setLoginError('');
+  async function handlePinSubmit(e) {
+    if (e) e.preventDefault();
+    setPinError("");
     try {
-      const res = await apiAdmin('login', { pin });
-      if (res.ok) {
-        setIsLoggedIn(true);
-        setPin('');
-      }
+      const data = await fetch("/api/admin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "login", pin: normalizePin(pinInput) }),
+      });
+      const result = await data.json().catch(() => ({}));
+      if (!data.ok) throw new Error(result.error || "PIN 錯誤");
+      sessionStorage.getItem("adminToken", result.token);
+      setAdminAuthed(true);
+      setPinInput("");
     } catch (err) {
-      setLoginError(err.message || 'PIN 碼不正確');
+      setPinError(err.message || "PIN 錯誤");
+      setPinInput("");
     }
-  };
+  }
 
-  // 4. Excel 檔案解析
-  const handleFileUpload = (e) => {
+  function handleFileChange(e) {
     const file = e.target.files?.[0];
     if (!file) return;
-
+    setUploadStatus(null);
+    setUploadBusy(true);
     const reader = new FileReader();
-    reader.onload = async (evt) => {
+    reader.onload = (evt) => {
       try {
-        const XLSX = await import('xlsx');
-        const workbook = XLSX.read(evt.target.result, { type: 'binary' });
-        const sheetName = workbook.SheetNames[0];
-        const rawData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
-
-        const formatted = rawData.map(row => ({
-          date: String(row['日期'] || row.date || '').trim(),
-          empId: String(row['員編'] || row.empId || row['員工編號'] || '').trim(),
-          name: String(row['姓名'] || row.name || '').trim(),
-          checkpoint: String(row['點位'] || row.checkpoint || row['支援點位'] || '').trim(),
-          workContent: String(row['工作內容'] || row.workContent || '').trim(),
-        })).filter(r => r.date && r.name);
-
-        if (formatted.length === 0) {
-          setAdminMsg('⚠️ 讀取到的有效資料筆數為 0，請確認 Excel 欄位名稱是否包含「日期」與「姓名」');
-          setExcelData([]);
+        const wb = XLSX.read(evt.target.result, { type: "array", cellDates: false });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const raw = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+        const normalized = normalizeRows(raw, uploadDateOverride);
+        if (normalized.length === 0) {
+          setUploadStatus({
+            type: "error",
+            msg: "無法辨識任何名單資料，請確認欄位包含「姓名或員工編號」、「點位」、「工作內容」。",
+          });
+          setUploadPreview(null);
         } else {
-          setExcelData(formatted);
-          setAdminMsg(`✅ 解析成功！共 ${formatted.length} 筆資料預覽如下，請確認後點擊送出。`);
+          setUploadPreview(normalized);
         }
       } catch (err) {
-        setAdminMsg('❌ Excel 解析失敗，請確認檔案格式是否正確。');
+        setUploadStatus({ type: "error", msg: "檔案讀取失敗，請確認為有效的 Excel 檔（.xlsx）。" });
+        setUploadPreview(null);
+      } finally {
+        setUploadBusy(false);
       }
     };
-    reader.readAsBinaryString(file);
-  };
+    reader.onerror = () => {
+      setUploadStatus({ type: "error", msg: "檔案讀取失敗，請再試一次。" });
+      setUploadBusy(false);
+    };
+    reader.readAsArrayBuffer(file);
+  }
 
-  // 5. 確認上傳至 Supabase
-  const handleConfirmUpload = async () => {
-    if (excelData.length === 0) return;
-    setIsUploading(true);
-    setAdminMsg('');
+  async function confirmUpload() {
+    if (!uploadPreview) return;
+    setUploadBusy(true);
     try {
-      await apiAdmin('upload', { records: excelData });
-      setAdminMsg('🎉 資料已成功匯入 Supabase 資料庫！');
-      setExcelData([]);
-      fetchDatesAndData(); // 重新整理前台日期與名單
+      const result = await apiAdmin("upload", { records: uploadPreview });
+      setUploadStatus({
+        type: "success",
+        msg: `已成功上傳 ${uploadPreview.length} 筆名單，涵蓋 ${result.dates?.length || 0} 個日期。`,
+      });
+      setUploadPreview(null);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      await loadDateList();
+      if (Object.keys(result.byDate || {}).includes(selectedDate)) loadRecordsForDate(selectedDate);
     } catch (err) {
-      setAdminMsg(`❌ 上傳失敗: ${err.message}`);
+      setUploadStatus({ type: "error", msg: err.message || "儲存失敗，請再試一次。" });
     } finally {
-      setIsUploading(false);
+      setUploadBusy(false);
     }
-  };
+  }
 
-  // 6. 刪除特定日期資料
-  const handleDeleteDate = async (d) => {
-    if (!window.confirm(`確定要刪除 ${d} 的所有班表紀錄嗎？`)) return;
+  async function deleteDate(date) {
+    setDeletingDate(date);
     try {
-      await apiAdmin('deleteDate', { date: d });
-      setAdminMsg(`已成功刪除 ${d} 的班表`);
-      fetchDatesAndData();
+      const result = await apiAdmin("deleteDate", { date });
+      const remaining = Array.isArray(result.dates) ? result.dates : [];
+      setAvailableDates(remaining);
+      if (selectedDate === date) {
+        const next = remaining[0] || todayStr();
+        setSelectedDate(next);
+      }
+      setUploadStatus({ type: "success", msg: `已刪除 ${date} 的名單。` });
     } catch (err) {
-      setAdminMsg(`刪除失敗: ${err.message}`);
+      setUploadStatus({ type: "error", msg: err.message || "刪除失敗，請再試一次。" });
+    } finally {
+      setDeletingDate(null);
     }
-  };
+  }
 
   return (
-    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans p-4 md:p-8">
-      {/* 頂部標頭區域 */}
-      <header className="max-w-5xl mx-auto mb-8 text-center border-b border-slate-800 pb-6">
-        <h1 className="flap-font text-3xl md:text-4xl text-amber-400 font-bold tracking-wider mb-2 drop-shadow">
-          支援人力點位查詢系統
-        </h1>
-        <p className="text-slate-400 text-sm">即時動態點位查詢與管理模組</p>
+    <div
+      className="min-h-screen w-full"
+      style={{ background: "#0B1220", fontFamily: "'Inter', sans-serif" }}
+    >
+      <style>{`
+        .flap-font { font-family: 'Barlow Condensed', sans-serif; }
+        .tabular { font-variant-numeric: tabular-nums; }
+        @keyframes riseIn { from { opacity:0; transform: translateY(8px);} to {opacity:1; transform: translateY(0);} }
+        .rise-in { animation: riseIn 0.35s ease-out; }
+        input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); opacity: 0.6; }
+      `}</style>
 
-        {/* 分頁切換按鈕 */}
-        <div className="flex justify-center gap-4 mt-6">
-          <button
-            onClick={() => setActiveTab('search')}
-            className={`px-6 py-2 rounded-full font-semibold text-sm transition-all ${
-              activeTab === 'search'
-                ? 'bg-amber-500 text-slate-950 shadow-lg shadow-amber-500/20'
-                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-            }`}
-          >
-            🔍 點位查詢
-          </button>
-          <button
-            onClick={() => setActiveTab('admin')}
-            className={`px-6 py-2 rounded-full font-semibold text-sm transition-all ${
-              activeTab === 'admin'
-                ? 'bg-amber-500 text-slate-950 shadow-lg shadow-amber-500/20'
-                : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-            }`}
-          >
-            ⚙️ 後台管理
-          </button>
-        </div>
-      </header>
-
-      <main className="max-w-5xl mx-auto">
-        {/* ==================== 頁面一：前台查詢 ==================== */}
-        {activeTab === 'search' && (
-          <div className="space-y-6">
-            {/* 搜尋與日期選單列 */}
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-900 p-4 rounded-xl border border-slate-800 shadow-xl">
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">選擇支援日期</label>
-                <select
-                  value={selectedDate}
-                  onChange={(e) => {
-                    setSelectedDate(e.target.value);
-                    fetchRosterByDate(e.target.value);
-                  }}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-amber-300 font-medium focus:outline-none focus:border-amber-500"
-                >
-                  {availableDates.length === 0 ? (
-                    <option value="">(目前無班表資料)</option>
-                  ) : (
-                    availableDates.map((d) => (
-                      <option key={d} value={d}>{d}</option>
-                    ))
-                  )}
-                </select>
+      {/* 頂部列 */}
+      <div
+        className="sticky top-0 z-10 w-full border-b"
+        style={{ background: "#0B1220", borderColor: "#1E2A44" }}
+      >
+        <div className="max-w-md mx-auto px-4 py-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <div className="flap-font uppercase tracking-widest text-red-400 text-xs font-semibold">
+                廣慈 / 奉天宮站
               </div>
-
-              <div className="md:col-span-2">
-                <label className="block text-xs text-slate-400 mb-1">快速搜尋（姓名、員編、點位、工作內容）</label>
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="輸入關鍵字..."
-                  className="w-full bg-slate-800 border border-slate-700 rounded-lg p-2.5 text-white placeholder-slate-500 focus:outline-none focus:border-amber-500"
-                />
+              <div className="flap-font text-slate-100 text-xl font-semibold leading-tight">
+                支援人力點位查詢系統
               </div>
             </div>
+            <div className="flex rounded-full overflow-hidden border" style={{ borderColor: "#28395A" }}>
+              <button
+                onClick={() => setMode("lookup")}
+                className="px-3 py-1.5 text-xs font-semibold transition"
+                style={{
+                  background: mode === "lookup" ? "#E3002B" : "transparent",
+                  color: mode === "lookup" ? "#FFFFFF" : "#8FA3C4",
+                }}
+              >
+                查詢
+              </button>
+              <button
+                onClick={() => setMode("admin")}
+                className="px-3 py-1.5 text-xs font-semibold transition"
+                style={{
+                  background: mode === "admin" ? "#E3002B" : "transparent",
+                  color: mode === "admin" ? "#FFFFFF" : "#8FA3C4",
+                }}
+              >
+                管理
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
 
-            {/* 訊息與載入顯示 */}
-            {loading && <p className="text-center text-amber-400 py-8 animate-pulse">資料讀取中...</p>}
-            {errorMsg && <p className="text-center text-red-400 py-4">{errorMsg}</p>}
+      <div className="max-w-md mx-auto px-4 pb-16 pt-4">
+        {mode === "lookup" ? (
+          <LookupView
+            availableDates={availableDates}
+            selectedDate={selectedDate}
+            setSelectedDate={setSelectedDate}
+            records={records}
+            recordsLoading={recordsLoading}
+            searchTerm={searchTerm}
+            setSearchTerm={setSearchTerm}
+            handleSearch={handleSearch}
+            searched={searched}
+            searchResults={searchResults}
+            selectedResult={selectedResult}
+            setSelectedResult={setSelectedResult}
+          />
+        ) : !adminAuthed ? (
+          <PinGate
+            pinInput={pinInput}
+            setPinInput={setPinInput}
+            pinError={pinError}
+            handlePinSubmit={handlePinSubmit}
+            lockedUntil={lockedUntil}
+          />
+        ) : (
+          <AdminView
+            availableDates={availableDates}
+            uploadDateOverride={uploadDateOverride}
+            setUploadDateOverride={setUploadDateOverride}
+            fileInputRef={fileInputRef}
+            handleFileChange={handleFileChange}
+            uploadPreview={uploadPreview}
+            uploadStatus={uploadStatus}
+            uploadBusy={uploadBusy}
+            confirmUpload={confirmUpload}
+            cancelPreview={() => {
+              setUploadPreview(null);
+              setUploadStatus(null);
+              if (fileInputRef.current) fileInputRef.current.value = "";
+            }}
+            deleteDate={deleteDate}
+            deletingDate={deletingDate}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
 
-            {/* 查詢結果卡片列表 */}
-            {!loading && (
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {filteredRosters.length === 0 ? (
-                  <div className="col-span-full text-center py-12 text-slate-500 bg-slate-900/50 rounded-xl border border-slate-800">
-                    尚無符合條件的班表資料
-                  </div>
-                ) : (
-                  filteredRosters.map((item, idx) => (
-                    <div
-                      key={item.id || idx}
-                      className="bg-slate-900 border border-slate-800 hover:border-amber-500/50 rounded-xl p-5 shadow-lg transition-all space-y-3"
-                    >
-                      <div className="flex justify-between items-start border-b border-slate-800 pb-2">
-                        <div>
-                          <span className="text-lg font-bold text-white mr-2">{item.name}</span>
-                          <span className="text-xs text-slate-400">({item.emp_id || '無員編'})</span>
-                        </div>
-                        <span className="text-xs bg-amber-500/10 text-amber-400 px-2.5 py-1 rounded-full font-mono">
-                          {item.date}
-                        </span>
-                      </div>
+/* ------------------------------------------------------------------ */
+/*  查詢畫面                                                          */
+/* ------------------------------------------------------------------ */
+function LookupView({
+  availableDates,
+  selectedDate,
+  setSelectedDate,
+  records,
+  recordsLoading,
+  searchTerm,
+  setSearchTerm,
+  handleSearch,
+  searched,
+  searchResults,
+  selectedResult,
+  setSelectedResult,
+}) {
+  return (
+    <div className="rise-in">
+      <div className="flex items-center justify-between mb-4">
+        <label className="text-xs text-slate-400 flap-font uppercase tracking-wider">
+          查詢日期
+        </label>
+        <select
+          value={selectedDate}
+          onChange={(e) => setSelectedDate(e.target.value)}
+          className="text-sm rounded-md px-2 py-1 border tabular"
+          style={{ background: "#131C30", color: "#E7EDF7", borderColor: "#28395A" }}
+        >
+          {!availableDates.includes(selectedDate) && (
+            <option value={selectedDate}>{selectedDate}（尚無名單）</option>
+          )}
+          {availableDates.map((d) => (
+            <option key={d} value={d}>
+              {d}
+              {d === todayStr() ? "（今日）" : ""}
+            </option>
+          ))}
+        </select>
+      </div>
 
-                      <div>
-                        <span className="text-xs text-slate-400 block mb-0.5">支援點位</span>
-                        <p className="text-amber-300 font-semibold">{item.checkpoint || '未指定'}</p>
-                      </div>
+      <div className="mb-2">
+        <div
+          className="flex items-center rounded-xl border px-3 py-2.5"
+          style={{ background: "#111A2E", borderColor: "#28395A" }}
+        >
+          <span className="text-slate-500 mr-2">🔎</span>
+          <input
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handleSearch();
+            }}
+            placeholder="輸入姓名或員工編號"
+            className="flex-1 bg-transparent outline-none text-slate-100 placeholder-slate-500 text-base"
+          />
+          <button
+            type="button"
+            onClick={handleSearch}
+            className="ml-2 px-3 py-1.5 rounded-lg text-sm font-semibold"
+            style={{ background: "#E3002B", color: "#FFFFFF" }}
+          >
+            查詢
+          </button>
+        </div>
+      </div>
 
-                      {item.work_content && (
-                        <div>
-                          <span className="text-xs text-slate-400 block mb-0.5">工作內容</span>
-                          <p className="text-xs text-slate-300 leading-relaxed bg-slate-950 p-2 rounded border border-slate-800/50">
-                            {item.work_content}
-                          </p>
-                        </div>
-                      )}
-                    </div>
-                  ))
-                )}
+      {recordsLoading && (
+        <div className="text-slate-500 text-sm mt-6 text-center">名單讀取中…</div>
+      )}
+
+      {!recordsLoading && records.length === 0 && (
+        <div
+          className="mt-8 text-center rounded-xl border border-dashed p-6"
+          style={{ borderColor: "#28395A" }}
+        >
+          <div className="text-slate-300 text-sm font-medium">
+            {selectedDate} 尚未上傳管制名單
+          </div>
+          <div className="text-slate-500 text-xs mt-1">請聯繫管理員確認當日名單是否已上傳。</div>
+        </div>
+      )}
+
+      {!recordsLoading && searched && searchResults.length > 1 && !selectedResult && (
+        <div className="mt-4 space-y-2">
+          <div className="text-xs text-slate-400 mb-1">找到 {searchResults.length} 筆相符資料，請選擇：</div>
+          {searchResults.map((r) => (
+            <button
+              key={r.id}
+              onClick={() => setSelectedResult(r)}
+              className="w-full text-left rounded-lg border px-3 py-2.5 flex items-center justify-between"
+              style={{ background: "#111A2E", borderColor: "#28395A" }}
+            >
+              <span className="text-slate-100 text-sm font-medium">{r.name}</span>
+              <span className="text-slate-500 text-xs tabular">{r.empId}</span>
+            </button>
+          ))}
+        </div>
+      )}
+
+      {!recordsLoading && searched && searchResults.length === 0 && (
+        <div
+          className="mt-6 text-center rounded-xl border p-6"
+          style={{ borderColor: "#3B2A2A", background: "#1A1210" }}
+        >
+          <div className="text-red-300 text-sm font-medium">查無此姓名或員工編號</div>
+          <div className="text-slate-500 text-xs mt-1">
+            請確認輸入內容或當日日期是否正確，如有疑問請聯繫現場管理人員。
+          </div>
+        </div>
+      )}
+
+      {selectedResult && (
+        <div className="mt-5 rise-in">
+          <div
+            className="rounded-2xl border overflow-hidden"
+            style={{ borderColor: "#2E4066", background: "#101A30" }}
+          >
+            <div
+              className="px-4 py-2 flex items-center justify-between text-xs flap-font tracking-wider uppercase"
+              style={{ background: "#1B2740", color: "#8FA3C4" }}
+            >
+              <span>執勤指派</span>
+              <span className="tabular">{selectedResult.date}</span>
+            </div>
+            <div className="px-5 py-5">
+              <div className="text-slate-400 text-xs mb-1">{selectedResult.empId}</div>
+              <div className="text-slate-100 text-lg font-semibold mb-4">{selectedResult.name}</div>
+
+              <div className="mb-4">
+                <div className="text-slate-500 text-xs mb-1 tracking-wide">管制點位</div>
+                <FlapText
+                  text={selectedResult.checkpoint || "（未指定）"}
+                  className="flap-font block text-3xl font-bold tracking-wide"
+                  style={{ color: "#E3002B" }}
+                />
               </div>
-            )}
+
+              <div>
+                <div className="text-slate-500 text-xs mb-1 tracking-wide">工作內容</div>
+                <div className="text-slate-200 text-sm leading-relaxed whitespace-pre-wrap">
+                  {selectedResult.workContent || "（未提供）"}
+                </div>
+              </div>
+            </div>
+            <div
+              className="px-4 py-2 text-xs text-center"
+              style={{ background: "#0D2A22", color: "#3DD9A8" }}
+            >
+              ● 已確認今日執勤資料
+            </div>
+          </div>
+          {searchResults.length > 1 && (
+            <button
+              onClick={() => setSelectedResult(null)}
+              className="mt-3 text-xs text-slate-400 underline"
+            >
+              ← 返回選擇其他相符結果
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  管理員 PIN 驗證                                                  */
+/* ------------------------------------------------------------------ */
+function PinGate({ pinInput, setPinInput, pinError, handlePinSubmit, lockedUntil }) {
+  const isLocked = !!(lockedUntil && lockedUntil > Date.now());
+  const [showPin, setShowPin] = useState(false);
+  return (
+    <div className="mt-10 rise-in">
+      <div
+        className="rounded-2xl border p-6 text-center"
+        style={{ borderColor: isLocked ? "#5B2A2A" : "#28395A", background: "#111A2E" }}
+      >
+        <div className="text-slate-300 text-sm mb-4">
+          {isLocked ? "此裝置已暫時鎖定管理登入" : "請輸入管理員 PIN 以上傳 / 管理名單"}
+        </div>
+        <div className="relative">
+          <input
+            type={showPin ? "text" : "password"}
+            inputMode="numeric"
+            value={pinInput}
+            disabled={isLocked}
+            onChange={(e) => setPinInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") handlePinSubmit(e);
+            }}
+            className="w-full text-center tracking-[0.5em] text-xl rounded-lg px-3 py-2 outline-none border disabled:opacity-40"
+            style={{ background: "#0B1220", color: "#E7EDF7", borderColor: "#28395A" }}
+            placeholder="••••"
+          />
+          <button
+            type="button"
+            onClick={() => setShowPin((v) => !v)}
+            disabled={isLocked}
+            className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 disabled:opacity-40"
+          >
+            {showPin ? "隱藏" : "顯示"}
+          </button>
+        </div>
+        {pinError && (
+          <div className={`text-xs mt-2 ${isLocked ? "text-red-300" : "text-red-400"}`}>
+            {pinError}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={handlePinSubmit}
+          disabled={isLocked}
+          className="mt-4 w-full py-2.5 rounded-lg font-semibold text-sm disabled:opacity-40"
+          style={{ background: "#E3002B", color: "#FFFFFF" }}
+        >
+          {isLocked ? "登入已鎖定" : "進入管理後台"}
+        </button>
+        <div className="text-slate-600 text-xs mt-3">
+          連續輸入錯誤 {MAX_PIN_ATTEMPTS} 次將鎖定此裝置 {LOCKOUT_MINUTES} 分鐘
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/*  管理員畫面                                                        */
+/* ------------------------------------------------------------------ */
+function AdminView({
+  availableDates,
+  uploadDateOverride,
+  setUploadDateOverride,
+  fileInputRef,
+  handleFileChange,
+  uploadPreview,
+  uploadStatus,
+  uploadBusy,
+  confirmUpload,
+  cancelPreview,
+  deleteDate,
+  deletingDate,
+}) {
+  return (
+    <div className="rise-in space-y-6">
+      <div className="rounded-2xl border p-4" style={{ borderColor: "#28395A", background: "#111A2E" }}>
+        <div className="flap-font text-slate-100 text-sm font-semibold uppercase tracking-wider mb-3">
+          上傳每日名單
+        </div>
+
+        <div className="mb-3">
+          <label className="text-xs text-slate-400 block mb-1">
+            預設日期（若 Excel 內無「日期」欄位時套用）
+          </label>
+          <input
+            type="date"
+            value={uploadDateOverride}
+            onChange={(e) => setUploadDateOverride(e.target.value)}
+            className="rounded-md px-2 py-1.5 border text-sm tabular"
+            style={{ background: "#0B1220", color: "#E7EDF7", borderColor: "#28395A" }}
+          />
+        </div>
+
+        <label
+          className="flex flex-col items-center justify-center rounded-xl border-2 border-dashed py-8 cursor-pointer transition hover:border-red-400"
+          style={{ borderColor: "#28395A" }}
+        >
+          <span className="text-slate-300 text-sm font-medium mb-1">點擊選擇 Excel 檔案</span>
+          <span className="text-slate-500 text-xs">
+            欄位建議：日期（選填）／姓名／員工編號／點位／工作內容
+          </span>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            onChange={handleFileChange}
+            className="hidden"
+          />
+        </label>
+
+        {uploadBusy && <div className="text-slate-400 text-xs mt-3">處理中…</div>}
+
+        {uploadStatus && (
+          <div
+            className="mt-3 text-xs rounded-md px-3 py-2"
+            style={{
+              background: uploadStatus.type === "error" ? "#1A1210" : "#0D2A22",
+              color: uploadStatus.type === "error" ? "#F87171" : "#3DD9A8",
+            }}
+          >
+            {uploadStatus.msg}
           </div>
         )}
 
-        {/* ==================== 頁面二：後台管理 ==================== */}
-        {activeTab === 'admin' && (
-          <div className="max-w-2xl mx-auto">
-            {!isLoggedIn ? (
-              /* 未登入：PIN 碼輸入卡片 */
-              <div className="bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-2xl space-y-6">
-                <div className="text-center">
-                  <h2 className="text-xl font-bold text-amber-400 mb-1">管理員解鎖驗證</h2>
-                  <p className="text-xs text-slate-400">請輸入 ADMIN PIN 碼以存取後台控制台</p>
-                </div>
-
-                <form onSubmit={handleLoginSubmit} className="space-y-4">
-                  <input
-                    type="password"
-                    value={pin}
-                    onChange={(e) => setPin(e.target.value)}
-                    placeholder="****"
-                    className="w-full bg-slate-950 border border-slate-700 rounded-xl p-3 text-center text-2xl tracking-widest text-white focus:outline-none focus:border-amber-500"
-                  />
-                  {loginError && <p className="text-xs text-red-400 text-center">{loginError}</p>}
-
-                  <button
-                    type="submit"
-                    className="w-full bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold py-3 rounded-xl transition shadow-lg shadow-amber-500/10"
-                  >
-                    驗證登入
-                  </button>
-                </form>
-              </div>
-            ) : (
-              /* 已登入：Excel 匯入與管理 */
-              <div className="bg-slate-900 p-6 rounded-2xl border border-slate-800 shadow-2xl space-y-6">
-                <div className="flex justify-between items-center border-b border-slate-800 pb-4">
-                  <span className="text-sm text-emerald-400 font-semibold flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
-                    已驗證管理員身份
-                  </span>
-                  <button
-                    onClick={() => {
-                      sessionStorage.removeItem('adminToken');
-                      setIsLoggedIn(false);
-                    }}
-                    className="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-lg border border-slate-700"
-                  >
-                    登出系統
-                  </button>
-                </div>
-
-                {/* 檔案上傳區 */}
-                <div className="space-y-2">
-                  <label className="block text-sm font-medium text-slate-200">選擇 Excel 檔案 (.xlsx)</label>
-                  <input
-                    type="file"
-                    accept=".xlsx, .xls"
-                    onChange={handleFileUpload}
-                    className="block w-full text-xs text-slate-400 file:mr-4 file:py-2.5 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-amber-500 file:text-slate-950 hover:file:bg-amber-400 cursor-pointer bg-slate-950 p-2 rounded-xl border border-slate-800"
-                  />
-                </div>
-
-                {/* 後台訊息提示 */}
-                {adminMsg && (
-                  <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-xs text-center text-slate-300">
-                    {adminMsg}
-                  </div>
-                )}
-
-                {/* 數據預覽與確認上傳 */}
-                {excelData.length > 0 && (
-                  <div className="space-y-4 pt-2">
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs text-slate-400">資料預覽（前 5 筆）</span>
-                      <span className="text-xs text-amber-400 font-mono">共 {excelData.length} 筆</span>
-                    </div>
-
-                    <div className="overflow-x-auto bg-slate-950 rounded-xl p-3 border border-slate-800 text-xs">
-                      <table className="w-full text-left border-collapse">
-                        <thead>
-                          <tr className="border-b border-slate-800 text-slate-400">
-                            <th className="p-1.5">日期</th>
-                            <th className="p-1.5">員編</th>
-                            <th className="p-1.5">姓名</th>
-                            <th className="p-1.5">點位</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {excelData.slice(0, 5).map((r, idx) => (
-                            <tr key={idx} className="border-b border-slate-900 text-slate-300">
-                              <td className="p-1.5">{r.date}</td>
-                              <td className="p-1.5">{r.empId}</td>
-                              <td className="p-1.5">{r.name}</td>
-                              <td className="p-1.5">{r.checkpoint}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-
-                    <button
-                      onClick={handleConfirmUpload}
-                      disabled={isUploading}
-                      className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 rounded-xl transition shadow-lg shadow-emerald-600/20 disabled:opacity-50"
-                    >
-                      {isUploading ? '正在寫入 Supabase 資料庫...' : '確認送出寫入資料庫'}
-                    </button>
-                  </div>
-                )}
-
-                {/* 已存在日期刪除管理 */}
-                {availableDates.length > 0 && (
-                  <div className="pt-6 border-t border-slate-800 space-y-3">
-                    <h3 className="text-xs font-semibold text-slate-400">已匯入的日期資料管理</h3>
-                    <div className="flex flex-wrap gap-2">
-                      {availableDates.map((d) => (
-                        <div
-                          key={d}
-                          className="flex items-center gap-2 bg-slate-950 px-3 py-1.5 rounded-lg border border-slate-800 text-xs"
-                        >
-                          <span className="text-amber-300 font-mono">{d}</span>
-                          <button
-                            onClick={() => handleDeleteDate(d)}
-                            className="text-red-400 hover:text-red-300 font-bold ml-1"
-                            title="刪除此日期的資料"
-                          >
-                            ✕
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
+        {uploadPreview && (
+          <div className="mt-4">
+            <div className="text-slate-300 text-xs mb-2">
+              預覽（共 {uploadPreview.length} 筆），確認無誤後送出：
+            </div>
+            <div
+              className="max-h-56 overflow-y-auto rounded-lg border"
+              style={{ borderColor: "#28395A" }}
+            >
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-slate-500" style={{ background: "#0B1220" }}>
+                    <th className="text-left px-2 py-1.5 font-medium">日期</th>
+                    <th className="text-left px-2 py-1.5 font-medium">姓名</th>
+                    <th className="text-left px-2 py-1.5 font-medium">員編</th>
+                    <th className="text-left px-2 py-1.5 font-medium">點位</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {uploadPreview.map((r) => (
+                    <tr key={r.id} className="border-t" style={{ borderColor: "#1E2A44" }}>
+                      <td className="px-2 py-1.5 text-slate-400 tabular">{r.date}</td>
+                      <td className="px-2 py-1.5 text-slate-200">{r.name}</td>
+                      <td className="px-2 py-1.5 text-slate-400 tabular">{r.empId}</td>
+                      <td className="px-2 py-1.5 text-slate-200">{r.checkpoint}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex gap-2 mt-3">
+              <button
+                onClick={confirmUpload}
+                disabled={uploadBusy}
+                className="flex-1 py-2 rounded-lg font-semibold text-sm disabled:opacity-50"
+                style={{ background: "#E3002B", color: "#FFFFFF" }}
+              >
+                確認送出
+              </button>
+              <button
+                onClick={cancelPreview}
+                className="px-4 py-2 rounded-lg font-semibold text-sm"
+                style={{ background: "#1B2740", color: "#8FA3C4" }}
+              >
+                取消
+              </button>
+            </div>
           </div>
         )}
-      </main>
+      </div>
+
+      <div className="rounded-2xl border p-4" style={{ borderColor: "#28395A", background: "#111A2E" }}>
+        <div className="flap-font text-slate-100 text-sm font-semibold uppercase tracking-wider mb-3">
+          已上傳名單
+        </div>
+        {availableDates.length === 0 ? (
+          <div className="text-slate-500 text-xs">目前尚無任何日期的名單資料。</div>
+        ) : (
+          <div className="space-y-2">
+            {availableDates.map((d) => (
+              <div
+                key={d}
+                className="flex items-center justify-between rounded-lg px-3 py-2"
+                style={{ background: "#0B1220" }}
+              >
+                <span className="text-slate-200 text-sm tabular">
+                  {d}
+                  {d === todayStr() ? " (今日)" : ""}
+                </span>
+                <button
+                  onClick={() => deleteDate(d)}
+                  disabled={deletingDate === d}
+                  className="text-xs text-red-400 disabled:opacity-50"
+                >
+                  {deletingDate === d ? "刪除中…" : "刪除"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="text-slate-600 text-xs text-center">
+        此名單資料所有使用者皆可查詢，請確認上傳內容不含非必要之個人資料。
+      </div>
     </div>
   );
 }
