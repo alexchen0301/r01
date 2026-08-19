@@ -12,6 +12,7 @@ const FLAP_POOL =
 
 const HEADER_MAP = {
   date: ["日期", "Date", "date"],
+  group: ["組別", "組", "組別名稱", "Group", "Team", "group", "team"],
   name: ["姓名", "名字", "Name", "name"],
   empId: ["員工編號", "員編", "工號", "EmpID", "ID", "員工編号"],
   checkpoint: ["點位", "崗位", "站點", "位置", "管制點", "崗哨", "Checkpoint"],
@@ -72,6 +73,7 @@ function normalizeRows(rawRows, fallbackDate) {
     .map((raw, i) => {
       const nameKey = findKey(raw, HEADER_MAP.name);
       const idKey = findKey(raw, HEADER_MAP.empId);
+      const groupKey = findKey(raw, HEADER_MAP.group);
       const cpKey = findKey(raw, HEADER_MAP.checkpoint);
       const workKey = findKey(raw, HEADER_MAP.workContent);
       const dateKey = findKey(raw, HEADER_MAP.date);
@@ -93,6 +95,7 @@ function normalizeRows(rawRows, fallbackDate) {
         name,
         empId,
         emp_id: empId,
+        group: groupKey ? String(raw[groupKey] ?? "").trim() : "",
         checkpoint: cpKey ? String(raw[cpKey] ?? "").trim() : "",
         workContent: workKey ? String(raw[workKey] ?? "").trim() : "",
         work_content: workKey ? String(raw[workKey] ?? "").trim() : "",
@@ -154,7 +157,6 @@ export default function App() {
   const fileInputRef = useRef(null);
   const [deletingDate, setDeletingDate] = useState(null);
 
-  // 1. 正確請求 /api/data?dates=1 取得日期清單
   const loadDateList = useCallback(async () => {
     try {
       const data = await apiGet("/api/data?dates=1");
@@ -168,7 +170,6 @@ export default function App() {
     }
   }, []);
 
-  // 2. 正確請求 /api/data?date=YYYY-MM-DD 取得當日資料並做欄位標準化
   const loadRecordsForDate = useCallback(async (date) => {
     if (!date) return;
     setRecordsLoading(true);
@@ -178,6 +179,7 @@ export default function App() {
       const normalizedRecords = rawRecords.map(r => ({
         ...r,
         empId: r.empId || r.emp_id || "",
+        group: r.group || r.group_name || "",
         workContent: r.workContent || r.work_content || "",
       }));
       setRecords(normalizedRecords);
@@ -330,6 +332,7 @@ export default function App() {
         input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); opacity: 0.6; }
       `}</style>
 
+      {/* 頂部列 */}
       <div
         className="sticky top-0 z-10 w-full border-b"
         style={{ background: "#0B1220", borderColor: "#1E2A44" }}
@@ -422,6 +425,9 @@ export default function App() {
   );
 }
 
+/* ------------------------------------------------------------------ */
+/*  查詢畫面                                                          */
+/* ------------------------------------------------------------------ */
 function LookupView({
   availableDates,
   selectedDate,
@@ -538,16 +544,28 @@ function LookupView({
             className="rounded-2xl border overflow-hidden"
             style={{ borderColor: "#2E4066", background: "#101A30" }}
           >
+            {/* 更新點 1：執勤指派 改為 管制點位 */}
             <div
               className="px-4 py-2 flex items-center justify-between text-xs flap-font tracking-wider uppercase"
               style={{ background: "#1B2740", color: "#8FA3C4" }}
             >
-              <span>執勤指派</span>
+              <span>管制點位</span>
               <span className="tabular">{selectedResult.date}</span>
             </div>
+            
             <div className="px-5 py-5">
               <div className="text-slate-400 text-xs mb-1">{selectedResult.empId}</div>
               <div className="text-slate-100 text-lg font-semibold mb-4">{selectedResult.name}</div>
+
+              {/* 更新點 3：新增組別欄位 */}
+              {selectedResult.group && (
+                <div className="mb-3">
+                  <div className="text-slate-500 text-xs mb-0.5 tracking-wide">組別</div>
+                  <div className="text-amber-300 font-semibold text-base">
+                    {selectedResult.group}
+                  </div>
+                </div>
+              )}
 
               <div className="mb-4">
                 <div className="text-slate-500 text-xs mb-1 tracking-wide">管制點位</div>
@@ -565,12 +583,8 @@ function LookupView({
                 </div>
               </div>
             </div>
-            <div
-              className="px-4 py-2 text-xs text-center"
-              style={{ background: "#0D2A22", color: "#3DD9A8" }}
-            >
-              ● 已確認今日執勤資料
-            </div>
+
+            {/* 更新點 2：已刪除 ● 已確認今日執勤資料 的底部區塊 */}
           </div>
           {searchResults.length > 1 && (
             <button
@@ -683,7 +697,7 @@ function AdminView({
         >
           <span className="text-slate-300 text-sm font-medium mb-1">點擊選擇 Excel 檔案</span>
           <span className="text-slate-500 text-xs">
-            欄位建議：日期（選填）／姓名／員工編號／點位／工作內容
+            欄位建議：日期（選填）／組別／姓名／員工編號／點位／工作內容
           </span>
           <input
             ref={fileInputRef}
