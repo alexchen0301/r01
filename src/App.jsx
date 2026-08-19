@@ -4,8 +4,8 @@ import * as XLSX from "xlsx";
 /* ------------------------------------------------------------------ */
 /*  設定區                                                            */
 /* ------------------------------------------------------------------ */
-const MAX_PIN_ATTEMPTS = 3; // 連續錯誤達此次數即封鎖
-const LOCKOUT_MINUTES = 15; // 封鎖持續時間（分鐘）
+const MAX_PIN_ATTEMPTS = 3; 
+const LOCKOUT_MINUTES = 15; 
 
 const FLAP_POOL =
   "廣慈奉天宮站管制點位工作內容人潮安全通車東西南北門口區域崗哨值勤守望警戒巡查".split("");
@@ -39,12 +39,11 @@ async function apiAdmin(action, payload = {}) {
       "Content-Type": "application/json", 
       "Authorization": `Bearer ${token}` 
     },
-    body: JSON.stringify({ action, ...payload, token }), // 將 token 同時放入 body 備用
+    body: JSON.stringify({ action, ...payload, token }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || "操作失敗");
   
-  // 雙重保險：登入成功自動寫入 Token
   if (action === "login" && data.token) {
     sessionStorage.setItem("adminToken", data.token);
   }
@@ -52,7 +51,7 @@ async function apiAdmin(action, payload = {}) {
 }
 
 function todayStr() {
-  return new Date().toLocaleDateString("sv-SE"); // YYYY-MM-DD
+  return new Date().toLocaleDateString("sv-SE"); 
 }
 
 function findKey(row, candidates) {
@@ -93,8 +92,10 @@ function normalizeRows(rawRows, fallbackDate) {
         date,
         name,
         empId,
+        emp_id: empId,
         checkpoint: cpKey ? String(raw[cpKey] ?? "").trim() : "",
         workContent: workKey ? String(raw[workKey] ?? "").trim() : "",
+        work_content: workKey ? String(raw[workKey] ?? "").trim() : "",
       };
     })
     .filter(Boolean);
@@ -159,6 +160,7 @@ export default function App() {
   const fileInputRef = useRef(null);
   const [deletingDate, setDeletingDate] = useState(null);
 
+  // 1. 讀取所有包含資料的日期列表
   const loadDateList = useCallback(async () => {
     try {
       const data = await apiGet("/api/roster");
@@ -172,12 +174,20 @@ export default function App() {
     }
   }, []);
 
+  // 2. 讀取特定日期的班表資料
   const loadRecordsForDate = useCallback(async (date) => {
     if (!date) return;
     setRecordsLoading(true);
     try {
       const data = await apiGet(`/api/roster?date=${encodeURIComponent(date)}`);
-      setRecords(Array.isArray(data.records) ? data.records : []);
+      const rawRecords = Array.isArray(data.records) ? data.records : [];
+      // 統一轉成前端需要的 key 格式
+      const normalizedRecords = rawRecords.map(r => ({
+        ...r,
+        empId: r.empId || r.emp_id || "",
+        workContent: r.workContent || r.work_content || "",
+      }));
+      setRecords(normalizedRecords);
     } catch {
       setRecords([]);
     } finally {
@@ -190,18 +200,9 @@ export default function App() {
       const list = await loadDateList();
       const initial = list.includes(todayStr()) ? todayStr() : list[0] || todayStr();
       setSelectedDate(initial);
-      loadRecordsForDate(initial);
+      if (initial) loadRecordsForDate(initial);
     })();
   }, [loadDateList, loadRecordsForDate]);
-
-  useEffect(() => {
-    if (selectedDate) {
-      loadRecordsForDate(selectedDate);
-      setSelectedResult(null);
-      setSearched(false);
-      setSearchTerm("");
-    }
-  }, [selectedDate, loadRecordsForDate]);
 
   useEffect(() => {
     if (sessionStorage.getItem("adminToken")) setAdminAuthed(true);
@@ -217,7 +218,9 @@ export default function App() {
     }
     const lower = term.toLowerCase();
     const results = records.filter(
-      (r) => r.name.includes(term) || r.empId.toLowerCase().includes(lower)
+      (r) => 
+        (r.name && r.name.includes(term)) || 
+        (r.empId && r.empId.toLowerCase().includes(lower))
     );
     setSearchResults(results);
     if (results.length === 1) setSelectedResult(results[0]);
@@ -291,6 +294,7 @@ export default function App() {
       setUploadPreview(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
       
+      // 重新加載最新日期列表
       const updatedList = await loadDateList();
       const targetDate = uploadPreview[0]?.date || updatedList[0] || todayStr();
       setSelectedDate(targetDate);
@@ -311,7 +315,7 @@ export default function App() {
       if (selectedDate === date) {
         const next = remaining[0] || todayStr();
         setSelectedDate(next);
-        loadRecordsForDate(next);
+        if (next) loadRecordsForDate(next);
       }
       setUploadStatus({ type: "success", msg: `已刪除 ${date} 的名單。` });
     } catch (err) {
@@ -380,8 +384,10 @@ export default function App() {
           <LookupView
             availableDates={availableDates}
             selectedDate={selectedDate}
-            setSelectedDate={setSelectedDate}
-            loadRecordsForDate={loadRecordsForDate}
+            setSelectedDate={(d) => {
+              setSelectedDate(d);
+              loadRecordsForDate(d);
+            }}
             records={records}
             recordsLoading={recordsLoading}
             searchTerm={searchTerm}
@@ -432,7 +438,6 @@ function LookupView({
   availableDates,
   selectedDate,
   setSelectedDate,
-  loadRecordsForDate,
   records,
   recordsLoading,
   searchTerm,
@@ -451,23 +456,20 @@ function LookupView({
         </label>
         <select
           value={selectedDate}
-          onChange={(e) => {
-            const d = e.target.value;
-            setSelectedDate(d);
-            loadRecordsForDate(d);
-          }}
+          onChange={(e) => setSelectedDate(e.target.value)}
           className="text-sm rounded-md px-2 py-1 border tabular"
           style={{ background: "#131C30", color: "#E7EDF7", borderColor: "#28395A" }}
         >
-          {!availableDates.includes(selectedDate) && (
-            <option value={selectedDate}>{selectedDate}（尚無名單）</option>
+          {availableDates.length === 0 ? (
+            <option value="">（尚無名單）</option>
+          ) : (
+            availableDates.map((d) => (
+              <option key={d} value={d}>
+                {d}
+                {d === todayStr() ? "（今日）" : ""}
+              </option>
+            ))
           )}
-          {availableDates.map((d) => (
-            <option key={d} value={d}>
-              {d}
-              {d === todayStr() ? "（今日）" : ""}
-            </option>
-          ))}
         </select>
       </div>
 
@@ -507,7 +509,7 @@ function LookupView({
           style={{ borderColor: "#28395A" }}
         >
           <div className="text-slate-300 text-sm font-medium">
-            {selectedDate} 尚未上傳管制名單
+            {selectedDate || "當前日期"} 尚未上傳管制名單
           </div>
           <div className="text-slate-500 text-xs mt-1">請聯繫管理員確認當日名單是否已上傳。</div>
         </div>
@@ -518,7 +520,7 @@ function LookupView({
           <div className="text-xs text-slate-400 mb-1">找到 {searchResults.length} 筆相符資料，請選擇：</div>
           {searchResults.map((r) => (
             <button
-              key={r.id}
+              key={r.id || `${r.name}-${r.empId}`}
               onClick={() => setSelectedResult(r)}
               className="w-full text-left rounded-lg border px-3 py-2.5 flex items-center justify-between"
               style={{ background: "#111A2E", borderColor: "#28395A" }}
