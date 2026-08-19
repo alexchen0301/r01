@@ -161,7 +161,7 @@ export default function App() {
 
   const loadDateList = useCallback(async () => {
     try {
-      const data = await apiGet("/api/data?dates=1");
+      const data = await apiGet("/api/roster");
       const list = Array.isArray(data.dates) ? data.dates : [];
       list.sort().reverse();
       setAvailableDates(list);
@@ -173,9 +173,10 @@ export default function App() {
   }, []);
 
   const loadRecordsForDate = useCallback(async (date) => {
+    if (!date) return;
     setRecordsLoading(true);
     try {
-      const data = await apiGet(`/api/data?date=${encodeURIComponent(date)}`);
+      const data = await apiGet(`/api/roster?date=${encodeURIComponent(date)}`);
       setRecords(Array.isArray(data.records) ? data.records : []);
     } catch {
       setRecords([]);
@@ -194,10 +195,12 @@ export default function App() {
   }, [loadDateList, loadRecordsForDate]);
 
   useEffect(() => {
-    loadRecordsForDate(selectedDate);
-    setSelectedResult(null);
-    setSearched(false);
-    setSearchTerm("");
+    if (selectedDate) {
+      loadRecordsForDate(selectedDate);
+      setSelectedResult(null);
+      setSearched(false);
+      setSearchTerm("");
+    }
   }, [selectedDate, loadRecordsForDate]);
 
   useEffect(() => {
@@ -232,7 +235,6 @@ export default function App() {
       const result = await data.json().catch(() => ({}));
       if (!data.ok) throw new Error(result.error || "PIN 錯誤");
       
-      // 修復核心問題：改用 setItem 存入 Token
       sessionStorage.setItem("adminToken", result.token);
       setAdminAuthed(true);
       setPinInput("");
@@ -288,8 +290,11 @@ export default function App() {
       });
       setUploadPreview(null);
       if (fileInputRef.current) fileInputRef.current.value = "";
-      await loadDateList();
-      if (Object.keys(result.byDate || {}).includes(selectedDate)) loadRecordsForDate(selectedDate);
+      
+      const updatedList = await loadDateList();
+      const targetDate = uploadPreview[0]?.date || updatedList[0] || todayStr();
+      setSelectedDate(targetDate);
+      loadRecordsForDate(targetDate);
     } catch (err) {
       setUploadStatus({ type: "error", msg: err.message || "儲存失敗，請再試一次。" });
     } finally {
@@ -306,6 +311,7 @@ export default function App() {
       if (selectedDate === date) {
         const next = remaining[0] || todayStr();
         setSelectedDate(next);
+        loadRecordsForDate(next);
       }
       setUploadStatus({ type: "success", msg: `已刪除 ${date} 的名單。` });
     } catch (err) {
@@ -375,6 +381,7 @@ export default function App() {
             availableDates={availableDates}
             selectedDate={selectedDate}
             setSelectedDate={setSelectedDate}
+            loadRecordsForDate={loadRecordsForDate}
             records={records}
             recordsLoading={recordsLoading}
             searchTerm={searchTerm}
@@ -425,6 +432,7 @@ function LookupView({
   availableDates,
   selectedDate,
   setSelectedDate,
+  loadRecordsForDate,
   records,
   recordsLoading,
   searchTerm,
@@ -443,7 +451,11 @@ function LookupView({
         </label>
         <select
           value={selectedDate}
-          onChange={(e) => setSelectedDate(e.target.value)}
+          onChange={(e) => {
+            const d = e.target.value;
+            setSelectedDate(d);
+            loadRecordsForDate(d);
+          }}
           className="text-sm rounded-md px-2 py-1 border tabular"
           style={{ background: "#131C30", color: "#E7EDF7", borderColor: "#28395A" }}
         >
