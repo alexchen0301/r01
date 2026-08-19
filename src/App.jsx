@@ -330,7 +330,7 @@ export default function App() {
                 廣慈 / 奉天宮站
               </div>
               <div className="flap-font text-slate-100 text-xl font-semibold leading-tight">
-                通車人潮管制系統
+                支援人力點位查詢系統
               </div>
             </div>
             <div className="flex rounded-full overflow-hidden border" style={{ borderColor: "#28395A" }}>
