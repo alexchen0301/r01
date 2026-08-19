@@ -559,7 +559,7 @@ function LookupView({
               {selectedResult.group && (
                 <div className="mb-3">
                   <div className="text-slate-500 text-xs mb-0.5 tracking-wide">組別</div>
-                  <div className="text-amber-300 font-semibold text-base">
+                  <div className="text-red-400 font-semibold text-base">
                     {selectedResult.group}
                   </div>
                 </div>
@@ -718,7 +718,6 @@ function AdminView({
           </div>
         )}
 
-        {/* 預覽表格包含組別欄位 */}
         {uploadPreview && (
           <div className="mt-4">
             <div className="text-slate-300 text-xs mb-2">
@@ -742,7 +741,7 @@ function AdminView({
                   {uploadPreview.map((r) => (
                     <tr key={r.id} className="border-t" style={{ borderColor: "#1E2A44" }}>
                       <td className="px-2 py-1.5 text-slate-400 tabular">{r.date}</td>
-                      <td className="px-2 py-1.5 text-amber-300">{r.group || "—"}</td>
+                      <td className="px-2 py-1.5 text-red-400">{r.group || "—"}</td>
                       <td className="px-2 py-1.5 text-slate-200">{r.name}</td>
                       <td className="px-2 py-1.5 text-slate-400 tabular">{r.empId}</td>
                       <td className="px-2 py-1.5 text-slate-200">{r.checkpoint}</td>
