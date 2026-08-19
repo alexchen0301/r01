@@ -1,89 +1,124 @@
-import crypto from "crypto";
-import { db, json } from "./_supabase.js";
+import { createClient } from '@supabase/supabase-js';
+import crypto from 'crypto';
 
-const SESSION_HOURS = 12;
+// 優先使用 ADMIN_PIN，若無則抓取 SUPABASE Key，最後保底使用固定字串作為加密鹽值
+const ADMIN_PIN = process.env.ADMIN_PIN;
+const JWT_SECRET = process.env.ADMIN_PIN || process.env.SUPABASE_ANON_KEY || "guangci_fallback_system_secret_2026";
 
-function sign(value) {
-  return crypto.createHmac("sha256", process.env.SESSION_SECRET).update(value).digest("base64url");
+function sign(payload) {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', String(JWT_SECRET))
+    .update(`${header}.${body}`)
+    .digest('base64url');
+  return `${header}.${body}.${signature}`;
 }
-function makeToken() {
-  const payload = Buffer.from(JSON.stringify({ exp: Date.now() + SESSION_HOURS * 3600 * 1000 })).toString("base64url");
-  return `${payload}.${sign(payload)}`;
-}
-function validToken(req) {
-  const h = req.headers.authorization || "";
-  const token = h.startsWith("Bearer ") ? h.slice(7) : "";
-  const [payload, sig] = token.split(".");
-  if (!payload || !sig) return false;
-  const expected = sign(payload);
-  if (sig.length !== expected.length) return false;
+
+function verify(token) {
+  if (!token) return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [header, body, signature] = parts;
+  const expected = crypto
+    .createHmac('sha256', String(JWT_SECRET))
+    .update(`${header}.${body}`)
+    .digest('base64url');
+  if (signature !== expected) return null;
   try {
-    if (!crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) return false;
-    const data = JSON.parse(Buffer.from(payload, "base64url").toString());
-    return data.exp > Date.now();
+    const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (payload.exp && Date.now() / 1000 > payload.exp) return null;
+    return payload;
   } catch {
-    return false;
+    return null;
   }
 }
 
-function normalizeRows(records) {
-  return records.map((r, i) => ({
-    date: String(r.date || "").trim(),
-    name: String(r.name || "").trim(),
-    emp_id: String(r.empId || "").trim(),
-    checkpoint: String(r.checkpoint || "").trim(),
-    work_content: String(r.workContent || "").trim(),
-    row_no: i
-  })).filter(r => r.date && (r.name || r.emp_id));
+function getSupabase() {
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_ANON_KEY;
+  if (!url || !key) {
+    throw new Error('Supabase 環境變數未設定，請至 Vercel 檢查 SUPABASE_URL 與 SUPABASE_ANON_KEY');
+  }
+  return createClient(url, key);
 }
 
 export default async function handler(req, res) {
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method Not Allowed' });
+  }
+
+  // 若 Vercel 完全未讀取到 ADMIN_PIN 變數，回傳明確提示
+  if (!ADMIN_PIN) {
+    return res.status(500).json({ error: '伺服器未讀取到 ADMIN_PIN 環境變數，請至 Vercel 設定並重新部署。' });
+  }
+
+  const { action, pin, records, date } = req.body || {};
+
+  // 登入驗證
+  if (action === 'login') {
+    if (!pin || String(pin).trim() !== String(ADMIN_PIN).trim()) {
+      return res.status(401).json({ error: 'PIN 碼不正確' });
+    }
+    const token = sign({ admin: true, exp: Math.floor(Date.now() / 1000) + 86400 });
+    return res.status(200).json({ ok: true, token });
+  }
+
+  // 以下操作皆需驗證 Token
+  const authHeader = req.headers.authorization || '';
+  const token = authHeader.replace(/^Bearer\s+/, '');
+  const auth = verify(token);
+
+  if (!auth) {
+    return res.status(401).json({ error: '權限不足或登入已過期，請重新輸入 PIN 碼' });
+  }
+
   try {
-    const body = req.body || {};
-    if (body.action === "login") {
-      if (!process.env.ADMIN_PIN) return json(res, 500, { error: "尚未設定 ADMIN_PIN" });
-      if (String(body.pin || "").trim() !== String(process.env.ADMIN_PIN).trim()) {
-        return json(res, 401, { error: "PIN 錯誤" });
+    const supabase = getSupabase();
+
+    // 上傳名單
+    if (action === 'upload') {
+      if (!Array.isArray(records) || records.length === 0) {
+        return res.status(400).json({ error: '無效的資料格式' });
       }
-      return json(res, 200, { token: makeToken() });
+
+      const byDate = {};
+      for (const r of records) {
+        if (!byDate[r.date]) byDate[r.date] = [];
+        byDate[r.date].push(r);
+      }
+
+      for (const [d, list] of Object.entries(byDate)) {
+        await supabase.from('rosters').delete().eq('date', d);
+        const { error } = await supabase.from('rosters').insert(
+          list.map((item) => ({
+            date: item.date,
+            emp_id: item.empId,
+            name: item.name,
+            checkpoint: item.checkpoint,
+            work_content: item.workContent,
+          }))
+        );
+        if (error) throw error;
+      }
+
+      return res.status(200).json({ ok: true, dates: Object.keys(byDate), byDate });
     }
 
-    if (!validToken(req)) return json(res, 401, { error: "登入已失效，請重新輸入 PIN" });
+    // 刪除特定日期的名單
+    if (action === 'deleteDate') {
+      if (!date) return res.status(400).json({ error: '未指定日期' });
+      const { error } = await supabase.from('rosters').delete().eq('date', date);
+      if (error) throw error;
 
-    const supabase = db();
-
-    if (body.action === "upload") {
-      const rows = normalizeRows(Array.isArray(body.records) ? body.records : []);
-      if (!rows.length) return json(res, 400, { error: "沒有可匯入的資料" });
-
-      const dates = [...new Set(rows.map(r => r.date))];
-      // 同一天重新匯入時，視為「取代當天名單」，避免重複。
-      const del = await supabase.from("assignments").delete().in("date", dates);
-      if (del.error) throw del.error;
-
-      const ins = await supabase.from("assignments").insert(rows);
-      if (ins.error) throw ins.error;
-
-      const all = await supabase.from("assignments").select("date");
-      if (all.error) throw all.error;
-      const allDates = [...new Set(all.data.map(r => r.date))].sort().reverse();
-      return json(res, 200, { dates: allDates, byDate: Object.fromEntries(dates.map(d => [d, true])) });
+      const { data } = await supabase.from('rosters').select('date');
+      const dates = Array.from(new Set((data || []).map((d) => d.date))).sort().reverse();
+      return res.status(200).json({ ok: true, dates });
     }
 
-    if (body.action === "deleteDate") {
-      const date = String(body.date || "").trim();
-      if (!date) return json(res, 400, { error: "缺少日期" });
-      const del = await supabase.from("assignments").delete().eq("date", date);
-      if (del.error) throw del.error;
-      const all = await supabase.from("assignments").select("date");
-      if (all.error) throw all.error;
-      const allDates = [...new Set(all.data.map(r => r.date))].sort().reverse();
-      return json(res, 200, { dates: allDates });
-    }
-
-    return json(res, 400, { error: "未知操作" });
-  } catch (e) {
-    console.error(e);
-    return json(res, 500, { error: "伺服器處理失敗，請稍後再試" });
+    return res.status(400).json({ error: '未知的操作類型' });
+  } catch (err) {
+    console.error('API Error:', err);
+    return res.status(500).json({ error: err.message || '伺服器處理失敗' });
   }
 }
