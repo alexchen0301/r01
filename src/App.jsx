@@ -101,9 +101,6 @@ function normalizeRows(rawRows, fallbackDate) {
     .filter(Boolean);
 }
 
-/* ------------------------------------------------------------------ */
-/*  翻牌文字                                                          */
-/* ------------------------------------------------------------------ */
 function FlapText({ text, className, style }) {
   const [display, setDisplay] = useState(text);
   useEffect(() => {
@@ -133,9 +130,6 @@ function FlapText({ text, className, style }) {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  主元件                                                            */
-/* ------------------------------------------------------------------ */
 export default function App() {
   const [mode, setMode] = useState("lookup");
   const [adminAuthed, setAdminAuthed] = useState(false);
@@ -160,10 +154,10 @@ export default function App() {
   const fileInputRef = useRef(null);
   const [deletingDate, setDeletingDate] = useState(null);
 
-  // 修復關鍵：讀取所有日期列表（改為正確的 /api/roster 路徑）
+  // 1. 正確請求 /api/data?dates=1 取得日期清單
   const loadDateList = useCallback(async () => {
     try {
-      const data = await apiGet("/api/roster");
+      const data = await apiGet("/api/data?dates=1");
       const list = Array.isArray(data.dates) ? data.dates : [];
       list.sort().reverse();
       setAvailableDates(list);
@@ -174,12 +168,12 @@ export default function App() {
     }
   }, []);
 
-  // 修復關鍵：讀取特定日期的班表（改為正確的 /api/roster?date= 路徑）
+  // 2. 正確請求 /api/data?date=YYYY-MM-DD 取得當日資料並做欄位標準化
   const loadRecordsForDate = useCallback(async (date) => {
     if (!date) return;
     setRecordsLoading(true);
     try {
-      const data = await apiGet(`/api/roster?date=${encodeURIComponent(date)}`);
+      const data = await apiGet(`/api/data?date=${encodeURIComponent(date)}`);
       const rawRecords = Array.isArray(data.records) ? data.records : [];
       const normalizedRecords = rawRecords.map(r => ({
         ...r,
@@ -336,7 +330,6 @@ export default function App() {
         input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); opacity: 0.6; }
       `}</style>
 
-      {/* 頂部列 */}
       <div
         className="sticky top-0 z-10 w-full border-b"
         style={{ background: "#0B1220", borderColor: "#1E2A44" }}
@@ -429,9 +422,6 @@ export default function App() {
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  查詢畫面                                                          */
-/* ------------------------------------------------------------------ */
 function LookupView({
   availableDates,
   selectedDate,
@@ -596,9 +586,6 @@ function LookupView({
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  管理員 PIN 驗證                                                   */
-/* ------------------------------------------------------------------ */
 function PinGate({ pinInput, setPinInput, pinError, handlePinSubmit, lockedUntil }) {
   const isLocked = !!(lockedUntil && lockedUntil > Date.now());
   const [showPin, setShowPin] = useState(false);
@@ -656,9 +643,6 @@ function PinGate({ pinInput, setPinInput, pinError, handlePinSubmit, lockedUntil
   );
 }
 
-/* ------------------------------------------------------------------ */
-/*  管理員畫面                                                        */
-/* ------------------------------------------------------------------ */
 function AdminView({
   availableDates,
   uploadDateOverride,
